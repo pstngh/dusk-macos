@@ -22,7 +22,7 @@ private func nearest(_ notches: [Double], _ v: Double) -> Int {
 
 final class StatusMenu: NSObject, NSMenuDelegate {
     private let tinter: Tinter
-    private var item: NSStatusItem? = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     /// The sliders' settings while the menu is open; saved when it closes.
     private var draft = Settings()
     private var edited = false
@@ -30,14 +30,14 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     init(_ tinter: Tinter) {
         self.tinter = tinter
         super.init()
-        item!.menu = NSMenu()
-        item!.menu!.delegate = self
+        item.menu = NSMenu()
+        item.menu!.delegate = self
         tinter.iconChanged = { [unowned self] in showIcon($0) }
         showIcon(tinter.icon)
     }
 
     private func showIcon(_ i: Int) {
-        item?.button?.image = NSImage(systemSymbolName: icons.indices.contains(i) ? icons[i] : icons[0], accessibilityDescription: "dusk")
+        item.button?.image = NSImage(systemSymbolName: icons.indices.contains(i) ? icons[i] : icons[0], accessibilityDescription: "dusk")
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -68,8 +68,6 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         let n = Night.around(t)
         menu.addItem(withTitle: "Sunset \(clock(n.sunset)) · red \(clock(n.red)) → \(clock(n.morning)) · sunrise \(clock(n.sunrise))",
                      action: nil, keyEquivalent: "")
-        menu.addItem(.separator())
-        add(menu, "Hide icon", #selector(hideIcon))
     }
 
     /// Live preview of the look being edited, until the menu closes.
@@ -123,12 +121,6 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         tinter.change { $0.noDither.toggle() }
         let on = tinter.settings.noDither
         DispatchQueue.global().async { on ? applyDisplay() : restoreDisplay() }
-    }
-
-    /// Until the next login; the tint keeps working.
-    @objc private func hideIcon() {
-        item.map(NSStatusBar.system.removeStatusItem)
-        item = nil
     }
 }
 

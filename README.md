@@ -47,7 +47,6 @@ The menu bar icon (sun, sunset or moon) opens a menu with:
 - Reset to defaults, Pause for 1 hour, Night until sunrise
 - Warm tint & dimming on/off, No dithering on/off
 - tonight's sunset, red and sunrise times
-- Hide icon (until the next login; dimming keeps working)
 
 ## Install
 

@@ -104,7 +104,8 @@ func currentLinks() -> [String: String] {
         guard let iface = create(kCFAllocatorDefault, service)?.takeRetainedValue(),
               let monitor = Monitor(copyAttributes(iface)?.takeRetainedValue()) else { continue }
         // The active color element starts at offset 8: depth, pixel encoding, dynamic range (0 = full), ...
-        var data = [UInt32](repeating: 0, count: 64)
+        // The call isn't told the buffer's size; 1 KB leaves room if a macOS update grows the struct.
+        var data = [UInt32](repeating: 0, count: 256)
         guard getLinkData(iface, &data) == kIOReturnSuccess, data[2] != 0 else { continue }
         links[monitor.id] = "\(data[2])-bit \(encodings[data[3]] ?? "encoding \(data[3])"), \(data[4] == 0 ? "full" : "limited") range"
     }

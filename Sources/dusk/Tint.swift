@@ -70,14 +70,19 @@ struct Settings {
     static func load() -> Settings {
         let d = store
         var s = Settings()
-        if let k = d.array(forKey: "kelvin") as? [Double], k.count == 3 { s.kelvin = k }
-        if let b = d.array(forKey: "brightness") as? [Double], b.count == 3 { s.brightness = b }
+        // Kept within what `dusk set` accepts, so a bad settings file can't black out the screens.
+        if let k = d.array(forKey: "kelvin") as? [Double], k.count == 3 { s.kelvin = k.map { limit($0, 0...6500) } }
+        if let b = d.array(forKey: "brightness") as? [Double], b.count == 3 { s.brightness = b.map { limit($0, 0.3...1) } }
         s.enabled = d.object(forKey: "enabled") as? Bool ?? true
         s.noDither = d.object(forKey: "noDither") as? Bool ?? true
         s.icon = d.object(forKey: "icon") as? Bool ?? true
         s.pausedUntil = d.object(forKey: "pausedUntil") as? Date
         s.nightUntil = d.object(forKey: "nightUntil") as? Date
         return s
+    }
+
+    private static func limit(_ v: Double, _ range: ClosedRange<Double>) -> Double {
+        v.isNaN ? range.upperBound : min(max(v, range.lowerBound), range.upperBound)
     }
 
     func save() {
@@ -396,7 +401,8 @@ final class Tinter {
             print("[\(stamp(t))] \(described)")
         }
         let next = schedule.nextChange(after: t, from: look)
-        timer.schedule(wallDeadline: next.map { .now() + Clock.delay(until: $0) } ?? .distantFuture)
+        // 0.1 s of slack lets macOS wake for this together with its own timers.
+        timer.schedule(wallDeadline: next.map { .now() + Clock.delay(until: $0) } ?? .distantFuture, leeway: .milliseconds(100))
         // Going idle: hand back the memory freed since the last time.
         if next.map({ Clock.delay(until: $0) > 60 }) ?? true { malloc_zone_pressure_relief(nil, 0) }
     }

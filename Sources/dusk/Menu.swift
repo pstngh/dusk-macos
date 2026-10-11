@@ -4,6 +4,7 @@ import AppKit
 
 private let warmthNotches: [Double] = [0, 1200, 1900, 2300, 2700, 3400, 4000, 4500, 5000, 5500, 6500]
 private let brightnessNotches = (6...20).map { Double($0) * 0.05 }  // 30...100%
+private let linkQueue = DispatchQueue(label: "local.dusk.link")
 private let icons = ["sun.max", "sunset", "moon", "circle.slash", "pause.circle"]
 
 func runTint() -> Never {
@@ -159,7 +160,8 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     @objc private func toggleDither() {
         tinter.change { $0.noDither.toggle() }
         let on = tinter.settings.noDither
-        DispatchQueue.global().async { on ? applyDisplay() : restoreDisplay() }
+        // One link change at a time, in the order clicked.
+        linkQueue.async { on ? applyDisplay() : restoreDisplay() }
     }
 }
 

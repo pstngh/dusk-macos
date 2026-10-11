@@ -16,6 +16,9 @@ func runTint() -> Never {
     exit(0)
 }
 
+private func warmthText(_ k: Double) -> String { k == 0 ? "Red" : k == 6500 ? "Off" : "\(Int(k)) K" }
+private func percentText(_ b: Double) -> String { "\(Int((b * 100).rounded()))%" }
+
 private func nearest(_ notches: [Double], _ v: Double) -> Int {
     notches.indices.min { abs(notches[$0] - v) < abs(notches[$1] - v) }!
 }
@@ -52,34 +55,43 @@ final class StatusMenu: NSObject, NSMenuDelegate {
                                      accessibilityDescription: "dusk")
     }
 
+    /// Built on each click and emptied when the menu closes.
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         draft = tinter.settings
         let t = Clock.now
-        menu.addItem(withTitle: Schedule(draft, around: t).now(t).capitalizedFirst, action: nil, keyEquivalent: "")
-        menu.addItem(.separator())
+        let schedule = Schedule(draft, around: t)
+        menu.addItem(label(schedule.describe(t).capitalizedFirst))
+        if let values = schedule.values(t) { menu.addItem(withTitle: values.capitalizedFirst, action: nil, keyEquivalent: "") }
         for phase in Phase.allCases {
             let p = phase.rawValue
-            menu.addItem(row(phase.name, warmthNotches, draft.kelvin[p], { $0 == 6500 ? "Off" : "\(Int($0)) K" }) { [unowned self] v in
+            menu.addItem(.separator())
+            if #available(macOS 14, *) {
+                menu.addItem(.sectionHeader(title: phase.name))
+            } else {
+                menu.addItem(withTitle: phase.name, action: nil, keyEquivalent: "")
+            }
+            menu.addItem(row("Warmth", warmthNotches, draft.kelvin[p], warmthText) { [unowned self] v in
                 draft.kelvin[p] = v
                 preview(phase)
             })
-            menu.addItem(row("", brightnessNotches, draft.brightness[p], { "\(Int(($0 * 100).rounded()))%" }) { [unowned self] v in
+            menu.addItem(row("Brightness", brightnessNotches, draft.brightness[p], percentText) { [unowned self] v in
                 draft.brightness[p] = v
                 preview(phase)
             })
         }
         menu.addItem(.separator())
         let paused = draft.paused(at: t)
-        add(menu, "Reset to defaults", #selector(reset))
         add(menu, paused ? "Paused until \(clock(draft.pausedUntil!))" : "Pause for 1 hour", #selector(pause), on: paused)
         add(menu, "Night until sunrise", #selector(nightUntilSunrise), on: draft.nightOverride(at: t))
+        menu.addItem(.separator())
         add(menu, "Warm tint & dimming", #selector(toggleTint), on: draft.enabled)
         add(menu, "No dithering", #selector(toggleDither), on: draft.noDither)
+        add(menu, "Reset to defaults", #selector(reset))
         menu.addItem(.separator())
         let n = Night.around(t)
-        menu.addItem(withTitle: "Sunset \(clock(n.sunset)) · red \(clock(n.red)) → \(clock(n.morning)) · sunrise \(clock(n.sunrise))",
-                     action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "Sunset \(clock(n.sunset)) · sunrise \(clock(n.sunrise))", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "Red \(clock(n.red)) → \(clock(n.morning))", action: nil, keyEquivalent: "")
     }
 
     /// Live preview of the look being edited, until the menu closes.
@@ -89,7 +101,11 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     }
 
     func menuDidClose(_ menu: NSMenu) {
-        DispatchQueue.main.async { malloc_zone_pressure_relief(nil, 0) }
+        // After the clicked item's action has run.
+        DispatchQueue.main.async {
+            menu.removeAllItems()
+            malloc_zone_pressure_relief(nil, 0)
+        }
         guard edited else { return }
         edited = false
         let looks = draft
@@ -101,6 +117,18 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         let item = NSMenuItem()
         item.view = SliderRow(title: title, count: notches.count, index: nearest(notches, value),
                               text: { text(notches[$0]) }) { changed(notches[$0]) }
+        return item
+    }
+
+    /// Bold text in the normal colour (a disabled item's title would be greyed out).
+    private func label(_ text: String) -> NSMenuItem {
+        let field = NSTextField(labelWithString: text)
+        field.font = .boldSystemFont(ofSize: NSFont.menuFont(ofSize: 0).pointSize)
+        field.sizeToFit()
+        field.frame.origin = NSPoint(x: 22, y: 3)
+        let item = NSMenuItem()
+        item.view = NSView(frame: NSRect(x: 0, y: 0, width: field.frame.maxX + 14, height: field.frame.height + 6))
+        item.view!.addSubview(field)
         return item
     }
 
@@ -149,29 +177,28 @@ private final class SliderRow: NSView {
         let font = NSFont.menuFont(ofSize: 0)
         let label = NSTextField(labelWithString: title)
         label.font = font
-        label.frame = NSRect(x: 20, y: 5, width: 64, height: 16)
-        slider.frame = NSRect(x: 84, y: 3, width: 140, height: 20)
+        label.frame = NSRect(x: 22, y: 5, width: 72, height: 16)
+        slider.frame = NSRect(x: 96, y: 3, width: 128, height: 20)
         slider.controlSize = .small
         slider.minValue = 0
         slider.maxValue = Double(count - 1)
-        slider.numberOfTickMarks = count
-        slider.allowsTickMarkValuesOnly = true
         slider.doubleValue = Double(index)
         slider.isContinuous = true
         slider.target = self
         slider.action = #selector(moved)
         value.font = NSFont.monospacedDigitSystemFont(ofSize: font.pointSize, weight: .regular)
         value.alignment = .right
-        value.frame = NSRect(x: 222, y: 5, width: 56, height: 16)
+        value.frame = NSRect(x: 226, y: 5, width: 52, height: 16)
         value.stringValue = text(index)
         [label, slider, value].forEach(addSubview)
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    /// Only act when the slider reaches another notch.
+    /// Snap to the nearest notch (they aren't drawn), and only act when it changes.
     @objc private func moved() {
         let i = Int(slider.doubleValue.rounded())
+        slider.doubleValue = Double(i)
         guard i != index else { return }
         index = i
         value.stringValue = text(i)

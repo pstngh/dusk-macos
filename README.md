@@ -43,13 +43,13 @@ Fades follow the clock, so after sleep the screen goes straight to where the fad
 
 The menu bar icon (sun, sunset or moon) opens a menu with:
 
-- what's on screen now: the look or fade, with its warmth and brightness (an estimate during a fade, e.g. "Day → Evening, fading until 18:32 · about 2900 K, 88%")
+- what's on screen now: the look or fade, and its warmth and brightness (an estimate during a fade, e.g. "about 2900 K, 88%")
 - a warmth and a brightness slider for each look, previewed live while you drag
-- Reset to defaults
 - Pause for 1 hour: no tint or dimming, then a 30-minute fade back into the schedule
 - Night until sunrise: Night until half an hour before sunrise, then a fade to Day
 - Warm tint & dimming on/off, No dithering on/off
-- tonight's sunset, red and sunrise times
+- Reset to defaults
+- tonight's sunset, sunrise and red times
 
 Everything in the menu is also a command (see [Usage](#usage)), and `dusk set icon off` hides the icon.
 
@@ -141,7 +141,7 @@ Settings are kept in `~/Library/Preferences/local.dusk.plist`. The log, `~/Libra
 
 Measured on a Mac mini M4 with macOS 26.6:
 
-- **Resident:** only `dusk tint`, 11 MB (as `top` shows it), with no idle wakeups.
+- **Resident:** only `dusk tint`, 11 MB (as `top` shows it), or 19 MB once the menu has been opened (macOS keeps its menu drawing code loaded), with no idle wakeups. The menu itself is built on each click and emptied when it closes.
 - **CPU:** well under a second a day: about 0.07 s per fade (four a day, about 900 one-level steps in all) and 0.1 s at login.
 - **Settings changes:** applied in about 30 ms.
 - **Display mode switch:** the tint and dimming are back about 25 ms after macOS resets them.

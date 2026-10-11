@@ -301,15 +301,18 @@ struct Schedule {
         return "\(a.phase.name), \(keys[i + 1].phase.name) from \(clock(keys[i].time))"
     }
 
-    /// `describe`, with the warmth and brightness on screen: an estimate while they're changing.
-    func now(_ t: Date) -> String {
+    /// The warmth and brightness on screen, nil without a tint: an estimate while they're changing.
+    func values(_ t: Date) -> String? {
         let look = look(t)
-        guard look.levels != Look.off.levels else { return describe(t) }
+        guard look.levels != Look.off.levels else { return nil }
         let percent = "\(Int((look.brightness * 100).rounded()))%"
-        guard look == self.look(t + 1) else {
-            return "\(describe(t)) · about \(Int((look.kelvin / 100).rounded()) * 100) K, \(percent)"
-        }
-        return "\(describe(t)) · \(kelvinText(look.kelvin)), \(percent)"
+        guard look == self.look(t + 1) else { return "about \(Int((look.kelvin / 100).rounded()) * 100) K, \(percent)" }
+        return "\(kelvinText(look.kelvin)), \(percent)"
+    }
+
+    /// `describe`, with the warmth and brightness on screen.
+    func now(_ t: Date) -> String {
+        values(t).map { "\(describe(t)) · \($0)" } ?? describe(t)
     }
 }
 

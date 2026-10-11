@@ -1,6 +1,6 @@
 # dusk-macos
 
-A small CLI for Apple Silicon Macs with external displays (SDR). It does two things:
+A small tool for Apple Silicon Macs with external displays (SDR), with a menu bar icon and a command line. It does two things:
 
 - **No dithering.** It stops temporal dithering, both the GPU's and the monitor's own (FRC).
 - **A warm screen at night.** A warm tint and dimming follow the sun in Montreal: a fade to Evening at sunset, to pure red before 9 PM, and back to Day by sunrise.
@@ -44,9 +44,13 @@ Fades follow the clock, so after sleep the screen goes straight to where the fad
 The menu bar icon (sun, sunset or moon) opens a menu with:
 
 - a warmth and a brightness slider for each look, previewed live while you drag
-- Reset to defaults, Pause for 1 hour, Night until sunrise
+- Reset to defaults
+- Pause for 1 hour: no tint or dimming, then a 30-minute fade back into the schedule
+- Night until sunrise: Night until half an hour before sunrise, then a fade to Day
 - Warm tint & dimming on/off, No dithering on/off
 - tonight's sunset, red and sunrise times
+
+Everything in the menu is also a command (see [Usage](#usage)), and `dusk set icon off` hides the icon.
 
 ## Install
 
@@ -73,7 +77,7 @@ Either way, `install` copies the binary to `~/.local/bin/dusk` and loads two Lau
 | LaunchAgent | Runs | When |
 |---|---|---|
 | `local.dusk.display` | `dusk agent` | At login and whenever a monitor attaches; applies no dithering, then exits |
-| `local.dusk.tint` | `dusk tint` | Always; shows the tint and dimming, and the menu bar icon |
+| `local.dusk.tint` | `dusk tint` | Always (launchd restarts it if it quits); shows the tint and dimming, and the menu bar icon |
 
 `install` also removes `nodither` (its LaunchAgent and `~/.local/bin/nodither`).
 
@@ -87,8 +91,8 @@ Either way, `install` copies the binary to `~/.local/bin/dusk` and loads two Lau
 | `dusk set tint on\|off` | Turn the warm tint and dimming on or off |
 | `dusk set dither on\|off` | `off` (the default) applies no dithering; `on` gives macOS back its default link and dithering |
 | `dusk set icon on\|off` | Show or hide the menu bar icon |
-| `dusk pause [minutes]` | No tint or dimming for a while (60 minutes by default), then a fade back |
-| `dusk night` | Night until sunrise |
+| `dusk pause [minutes]` | No tint or dimming for a while (60 minutes by default), then a 30-minute fade back |
+| `dusk night` | Night until half an hour before sunrise, then a fade to Day |
 | `dusk resume` | End a pause or night |
 | `dusk reset` | Back to the default looks |
 | `dusk apply` | Apply no dithering and the tint again now, e.g. after another app reset the colours |
@@ -114,7 +118,7 @@ Tint
   now           Day, Evening from 18:02
 ```
 
-The log is at `~/Library/Logs/dusk.log`.
+Settings are kept in `~/Library/Preferences/local.dusk.plist`. The log, `~/Library/Logs/dusk.log`, gets a line when a fade starts or ends, when a pause, Night or off begins, and when no dithering is applied.
 
 ## How it works
 
@@ -151,6 +155,8 @@ Measured on a Mac mini M4 with macOS 26.6:
 - Night Shift, color profile switches, gamma changes and Color Filters don't reset the link or `enableDither` (tested).
 - Don't run another app that tints or dims with gamma tables alongside dusk; they would overwrite each other's tables. If a command-line tool resets the gamma tables, `dusk apply` sets them again.
 - While a tint or dimming is on, the display's calibration curve (`vcgt` in its color profile), if it has one, is replaced, like with other gamma-table apps.
+- Changing the link (`dusk set dither on|off`, the No dithering menu item, `uninstall`) makes the monitors go black for a second or two while they retrain.
+- The location is fixed to Montreal; the coordinates and schedule rules are constants at the top of `Sources/dusk/Tint.swift`.
 - `uninstall` switches each external monitor back to the link WindowServer picks by default and turns GPU dithering back on.
 
 ## License

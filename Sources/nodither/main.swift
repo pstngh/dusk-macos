@@ -1,12 +1,11 @@
 // nodither: stop temporal dithering on external displays (Apple Silicon, SDR).
-//   apply [monitor ...]    set each external display's link to 8-bit (RGB full range when offered),
-//                          then set enableDither = No
-//   status                 show enableDither and the current link format per external display
-//   install [monitor ...]  copy this binary to ~/.local/bin and load a LaunchAgent that runs
-//                          `agent` at login and whenever a display is attached
-//   uninstall              unload the LaunchAgent, restore the link and dithering defaults, remove files
-//   agent [monitor ...]    (run by the LaunchAgent) wait for displays to settle, then `apply`
-// Monitor names are case-insensitive substrings; without any, all external displays are managed.
+//   apply      set each external display's link to 8-bit (RGB full range when offered),
+//              then set enableDither = No
+//   status     show enableDither and the current link format per external display
+//   install    copy this binary to ~/.local/bin and load a LaunchAgent that runs `agent`
+//              at login and whenever a display is attached
+//   uninstall  unload the LaunchAgent, restore the link and dithering defaults, remove files
+//   agent      (run by the LaunchAgent) wait for displays to settle, then `apply`
 
 import CoreGraphics
 import Foundation
@@ -52,13 +51,6 @@ struct LinkDescription: Equatable {
         let encodings: [UInt32: String] = [0: "RGB", 1: "YCbCr 4:4:4", 2: "YCbCr 4:2:2"]
         return "\(bitDepth)-bit \(encodings[encoding] ?? "encoding \(encoding)"), \(range == 1 ? "full" : "limited") range"
     }
-}
-
-/// Monitor name filters from the command line; empty means every external display.
-var only = Array(CommandLine.arguments.dropFirst(2))
-func managed(_ name: String?) -> Bool {
-    guard !only.isEmpty else { return true }
-    return name.map { n in only.contains { n.localizedCaseInsensitiveContains($0) } } ?? false
 }
 
 /// Set when any step fails; becomes the exit status, which `launchctl print` shows.
@@ -135,7 +127,7 @@ func externalDisplays() -> [CGDirectDisplayID] {
     return ids.prefix(Int(count)).filter { CGDisplayIsBuiltin($0) == 0 }
 }
 
-/// Set each managed external display's link to the preferred 8-bit link, or with `restore` to
+/// Set each external display's link to the preferred 8-bit link, or with `restore` to
 /// WindowServer's own choice (the first link it lists, which is what it picks by default).
 func setLinks(restore: Bool = false) {
     guard let getMode = SLSGetCurrentDisplayMode, let getLinks = SLSGetDisplayOutputModeLinkDescriptions,
@@ -147,7 +139,6 @@ func setLinks(restore: Bool = false) {
     var config: CGDisplayConfigRef?
     for id in externalDisplays() {
         let name = fbs.lazy.compactMap(\.monitor).first { $0.id == Monitor.id(id) }?.name ?? "display \(id)"
-        guard managed(name) else { continue }
         var mode: Int32 = 0
         var descs = [LinkDescription](repeating: .zero, count: 32)
         var count = Int32(descs.count), current: Int32 = -1
@@ -183,12 +174,8 @@ func setLinks(restore: Bool = false) {
 func setDither(_ enabled: Bool) {
     let fbs = externalFramebuffers()
     if fbs.isEmpty { fail("no external display pipes found") }
-    if !only.isEmpty, !fbs.contains(where: { $0.monitor != nil && managed($0.monitor?.name) }) {
-        fail("no connected monitor matches \(only.joined(separator: ", "))")
-    }
     for fb in fbs {
         defer { IOObjectRelease(fb.service) }
-        guard managed(fb.monitor?.name) else { continue }
         let name = fb.monitor?.name ?? "(no display)"
         let kr = IORegistryEntrySetCFProperty(fb.service, "enableDither" as CFString, enabled ? kCFBooleanTrue : kCFBooleanFalse)
         kr == KERN_SUCCESS ? print("\(name): enableDither = \(enabled ? "Yes" : "No")")
@@ -267,7 +254,7 @@ func install() throws {
     let log = home.appendingPathComponent("Library/Logs/nodither.log").path
     let plist: [String: Any] = [
         "Label": label,
-        "ProgramArguments": [installedBinary.path, "agent"] + only,
+        "ProgramArguments": [installedBinary.path, "agent"],
         "RunAtLoad": true,
         // launchd watches IOKit and starts us only when a monitor's AV service appears.
         "LaunchEvents": ["com.apple.iokit.matching": ["display attached": [
@@ -288,10 +275,6 @@ func install() throws {
 }
 
 func uninstall() {
-    // Restore exactly the monitors the installed agent managed.
-    if let args = NSDictionary(contentsOf: agentPlist)?["ProgramArguments"] as? [String] {
-        only = Array(args.dropFirst(2))
-    }
     launchctl("bootout", "gui/\(getuid())/\(label)")
     setLinks(restore: true)
     setDither(true)
@@ -307,7 +290,7 @@ case "status": status()
 case "install": do { try install() } catch { fail("install failed: \(error)") }
 case "uninstall": uninstall()
 default:
-    print("usage: nodither apply [monitor ...] | install [monitor ...] | status | uninstall")
+    print("usage: nodither apply | status | install | uninstall")
     exit(2)
 }
 exit(failed ? 1 : 0)

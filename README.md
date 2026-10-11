@@ -35,12 +35,10 @@ Either way, `install` copies the binary to `~/.local/bin/nodither` and loads the
 
 | Command | |
 |---|---|
-| `nodither apply [monitor ...]` | Set 8-bit links (RGB full range when offered), then `enableDither = No` |
+| `nodither apply` | Set 8-bit links (RGB full range when offered), then `enableDither = No` |
 | `nodither status` | Show `enableDither` and the current link per external display |
-| `nodither install [monitor ...]` | Install the binary and LaunchAgent |
+| `nodither install` | Install the binary and LaunchAgent |
 | `nodither uninstall` | Remove the LaunchAgent and binary, and restore the default link and dithering |
-
-Monitors are matched by any part of their name, ignoring case (`nodither install U4323`). Without names, every external display is managed. `uninstall` restores exactly the monitors the installed agent managed.
 
 ```
 $ nodither status
@@ -80,7 +78,7 @@ BetterDisplay does far more: a GUI, any connection mode including ones WindowSer
 - `enableDither` resets on reboot; the LaunchAgent sets it again at login.
 - Display mode changes don't undo it. WindowServer applies the saved 8-bit RGB link to whatever mode is active, so a game that switches resolution or refresh rate keeps it, and GPU dithering stays off across the link retrain (tested 4K60 → 4K30 and 240 → 120 Hz, during the switch and after the game quits).
 - Night Shift, color profile switches and gamma changes don't reset the link or `enableDither` (tested).
-- `uninstall` switches each managed monitor back to the link WindowServer picks by default and turns GPU dithering back on.
+- `uninstall` switches each external monitor back to the link WindowServer picks by default and turns GPU dithering back on.
 
 ## Credits
 

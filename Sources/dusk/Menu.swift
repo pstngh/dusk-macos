@@ -12,6 +12,10 @@ private let icons = ["sun.max", "sunset", "moon", "circle.slash", "pause.circle"
 
 private var app: MenuApp!
 
+/// Restart the tint job off the main thread: launchctl waits out launchd's restart throttle.
+private let kicker = DispatchQueue(label: "local.dusk.kick")
+private func kick() { kicker.async { kickTint() } }
+
 func runMenu(icon: Bool) -> Never {
     NSApplication.shared.setActivationPolicy(.accessory)
     app = MenuApp(icon: icon)
@@ -55,7 +59,7 @@ final class MenuApp: NSObject, NSMenuDelegate {
         }
         setBrightness(scheduled.brightness)
         // Re-apply the schedule, in case a menu preview was cut short by a crash.
-        kickTint()
+        kick()
         // Hand back the memory AppKit freed while starting up.
         DispatchQueue.main.async { malloc_zone_pressure_relief(nil, 0) }
     }
@@ -161,7 +165,7 @@ final class MenuApp: NSObject, NSMenuDelegate {
         edited = false
         settings.save()
         setBrightness(scheduled.brightness)
-        kickTint()
+        kick()
     }
 
     private func row(_ title: String, _ notches: [Double], _ index: Int, _ text: @escaping (Double) -> String,
@@ -180,7 +184,7 @@ final class MenuApp: NSObject, NSMenuDelegate {
     private func update(_ change: (inout Settings) -> Void) {
         change(&settings)
         settings.save()
-        kickTint()
+        kick()
     }
 
     @objc private func reset() {

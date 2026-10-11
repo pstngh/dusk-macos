@@ -97,7 +97,8 @@ func install(menu: Bool) throws {
             "IOMatchLaunchStream": true,
         ]]]]),
         // launchd runs missed calendar checks after wake and never starts a second instance.
-        ("tint", ["tick"], ["StartCalendarInterval": checkHours.map { ["Hour": $0, "Minute": 0] }]),
+        // ThrottleInterval 1: a settings change restarts the job within a second, not 10.
+        ("tint", ["tick"], ["StartCalendarInterval": checkHours.map { ["Hour": $0, "Minute": 0] }, "ThrottleInterval": 1]),
         ("menu", menu ? ["menu"] : ["menu", "--no-icon"], ["KeepAlive": true]),
     ]
     try fm.createDirectory(at: agentPlist("").deletingLastPathComponent(), withIntermediateDirectories: true)

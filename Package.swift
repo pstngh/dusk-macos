@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "nodither",
+    name: "dusk",
     platforms: [.macOS(.v13)],
-    targets: [.executableTarget(name: "nodither")]
+    targets: [.executableTarget(name: "dusk")]
 )

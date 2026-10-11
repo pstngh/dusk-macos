@@ -1,11 +1,4 @@
-// nodither: stop temporal dithering on external displays (Apple Silicon, SDR).
-//   apply      set each external display's link to 8-bit (RGB full range when offered),
-//              then set enableDither = No
-//   status     show enableDither and the current link format per external display
-//   install    copy this binary to ~/.local/bin and load a LaunchAgent that runs `agent`
-//              at login and whenever a display is attached
-//   uninstall  unload the LaunchAgent, restore the link and dithering defaults, remove files
-//   agent      (run by the LaunchAgent) wait for displays to settle, then `apply`
+// No dithering on external displays: an 8-bit link (RGB full range when offered) and enableDither = No.
 
 import CoreGraphics
 import Foundation
@@ -14,7 +7,7 @@ import XPC
 
 // MARK: - Private API (resolved at runtime; nil if a macOS update removes it)
 
-private func sym<T>(_ lib: String, _ name: String, _: T.Type) -> T? {
+func sym<T>(_ lib: String, _ name: String, _: T.Type) -> T? {
     guard let handle = dlopen(lib, RTLD_LAZY), let p = dlsym(handle, name) else { return nil }
     return unsafeBitCast(p, to: T.self)
 }
@@ -91,8 +84,8 @@ struct Monitor {
     }
 }
 
-/// External display pipes, matched via IOMobileFramebufferAP like Stillcolor (parent class of
-/// AppleCLCD2 and IOMobileFramebufferShim). `monitor` is nil when nothing is connected.
+/// External display pipes, matched via IOMobileFramebufferAP (the parent class of AppleCLCD2 and
+/// IOMobileFramebufferShim). `monitor` is nil when nothing is connected.
 func externalFramebuffers() -> [(service: io_service_t, monitor: Monitor?)] {
     services("IOMobileFramebufferAP").compactMap { service in
         guard property(service, "external") as? Bool == true else { IOObjectRelease(service); return nil }
@@ -118,7 +111,7 @@ func currentLinks() -> [String: String] {
     return links
 }
 
-// MARK: - Commands
+// MARK: - Link and dithering
 
 func externalDisplays() -> [CGDirectDisplayID] {
     var ids = [CGDirectDisplayID](repeating: 0, count: 16)
@@ -183,14 +176,21 @@ func setDither(_ enabled: Bool) {
     }
 }
 
-func apply() {
+func applyDisplay() {
     setLinks()
     setDither(false)
 }
 
-/// Launched by launchd at login and when a display attaches; nothing stays resident between runs.
-func agent() {
-    print("[\(Date())] agent")
+/// Back to macOS defaults: WindowServer's own link and GPU dithering on.
+func restoreDisplay() {
+    setLinks(restore: true)
+    setDither(true)
+}
+
+/// `dusk agent`: launched by launchd at login and when a display attaches; nothing stays resident between runs.
+func displayAgent() {
+    print("[\(stamp())] agent")
+    guard Settings.load().noDither else { return print("no dithering is turned off, skipping") }
     // launchd keeps relaunching the job until its IOKit match events are received.
     let lock = NSLock()
     var lastEvent = Date()
@@ -211,11 +211,11 @@ func agent() {
             if connected > 0, externalDisplays().count >= connected, Date().timeIntervalSince(settled) >= 2 { break }
             usleep(250_000)
         } while Date().timeIntervalSince(start) < 30
-        apply()
+        applyDisplay()
     } while lock.withLock({ lastEvent }) != settled
 }
 
-func status() {
+func displayStatus() {
     let links = currentLinks()
     let fbs = externalFramebuffers()
     defer { fbs.forEach { IOObjectRelease($0.service) } }
@@ -226,71 +226,3 @@ func status() {
         print("  link          \(links[monitor.id] ?? "unknown")")
     }
 }
-
-let label = "local.nodither"
-let home = FileManager.default.homeDirectoryForCurrentUser
-let installedBinary = home.appendingPathComponent(".local/bin/nodither")
-let agentPlist = home.appendingPathComponent("Library/LaunchAgents/\(label).plist")
-
-@discardableResult
-func launchctl(_ args: String...) -> Int32 {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-    p.arguments = args
-    p.standardError = FileHandle.nullDevice
-    try? p.run()
-    p.waitUntilExit()
-    return p.terminationStatus
-}
-
-func install() throws {
-    let fm = FileManager.default
-    let me = Bundle.main.executableURL!.resolvingSymlinksInPath()
-    try fm.createDirectory(at: installedBinary.deletingLastPathComponent(), withIntermediateDirectories: true)
-    if me.path != installedBinary.path {
-        try? fm.removeItem(at: installedBinary)
-        try fm.copyItem(at: me, to: installedBinary)
-    }
-    let log = home.appendingPathComponent("Library/Logs/nodither.log").path
-    let plist: [String: Any] = [
-        "Label": label,
-        "ProgramArguments": [installedBinary.path, "agent"],
-        "RunAtLoad": true,
-        // launchd watches IOKit and starts us only when a monitor's AV service appears.
-        "LaunchEvents": ["com.apple.iokit.matching": ["display attached": [
-            "IOProviderClass": "DCPAVServiceProxy",
-            "IOPropertyMatch": ["Location": "External"],
-            "IOMatchLaunchStream": true,
-        ]]],
-        "StandardOutPath": log,
-        "StandardErrorPath": log,
-    ]
-    try fm.createDirectory(at: agentPlist.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0).write(to: agentPlist)
-    let domain = "gui/\(getuid())"
-    launchctl("bootout", "\(domain)/\(label)")
-    let rc = launchctl("bootstrap", domain, agentPlist.path)
-    rc == 0 ? print("installed \(installedBinary.path)\nloaded \(agentPlist.path) (log: \(log))")
-            : fail("launchctl bootstrap failed (\(rc))")
-}
-
-func uninstall() {
-    launchctl("bootout", "gui/\(getuid())/\(label)")
-    setLinks(restore: true)
-    setDither(true)
-    try? FileManager.default.removeItem(at: agentPlist)
-    try? FileManager.default.removeItem(at: installedBinary)
-    print("removed \(agentPlist.path) and \(installedBinary.path)")
-}
-
-switch CommandLine.arguments.dropFirst().first {
-case "apply": apply()
-case "agent": agent()
-case "status": status()
-case "install": do { try install() } catch { fail("install failed: \(error)") }
-case "uninstall": uninstall()
-default:
-    print("usage: nodither apply | status | install | uninstall")
-    exit(2)
-}
-exit(failed ? 1 : 0)

@@ -6,10 +6,10 @@ private let warmthNotches: [Double] = [0, 1200, 1900, 2300, 2700, 3400, 4000, 45
 private let brightnessNotches = (6...20).map { Double($0) * 0.05 }  // 30...100%
 private let icons = ["sun.max", "sunset", "moon", "circle.slash", "pause.circle"]
 
-func runTint(icon: Bool) -> Never {
+func runTint() -> Never {
     NSApplication.shared.setActivationPolicy(.accessory)
     let tinter = Tinter()
-    let menu = icon ? StatusMenu(tinter) : nil
+    let menu = StatusMenu(tinter)
     // Hand back the memory AppKit freed while starting up.
     DispatchQueue.main.asyncAfter(deadline: .now() + 2) { malloc_zone_pressure_relief(nil, 0) }
     withExtendedLifetime((tinter, menu)) { NSApplication.shared.run() }
@@ -22,7 +22,8 @@ private func nearest(_ notches: [Double], _ v: Double) -> Int {
 
 final class StatusMenu: NSObject, NSMenuDelegate {
     private let tinter: Tinter
-    private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    private var item: NSStatusItem?
+    private var shownIcon = -1
     /// The sliders' settings while the menu is open; saved when it closes.
     private var draft = Settings()
     private var edited = false
@@ -30,14 +31,25 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     init(_ tinter: Tinter) {
         self.tinter = tinter
         super.init()
-        item.menu = NSMenu()
-        item.menu!.delegate = self
-        tinter.iconChanged = { [unowned self] in showIcon($0) }
-        showIcon(tinter.icon)
+        tinter.updated = { [unowned self] in refresh() }
+        refresh()
     }
 
-    private func showIcon(_ i: Int) {
-        item.button?.image = NSImage(systemSymbolName: icons.indices.contains(i) ? icons[i] : icons[0], accessibilityDescription: "dusk")
+    /// Show or hide the icon as the settings say, and match it to the phase.
+    private func refresh() {
+        if tinter.settings.icon, item == nil {
+            item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+            item!.menu = NSMenu()
+            item!.menu!.delegate = self
+            shownIcon = -1
+        } else if !tinter.settings.icon, let item {
+            NSStatusBar.system.removeStatusItem(item)
+            self.item = nil
+        }
+        guard let item, tinter.icon != shownIcon else { return }
+        shownIcon = tinter.icon
+        item.button?.image = NSImage(systemSymbolName: icons.indices.contains(shownIcon) ? icons[shownIcon] : icons[0],
+                                     accessibilityDescription: "dusk")
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -99,18 +111,17 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     }
 
     @objc private func reset() {
-        tinter.change { $0.kelvin = Settings.presetKelvin; $0.brightness = Settings.presetBrightness }
+        tinter.change { $0.resetLooks() }
     }
 
     @objc private func pause() {
         let t = Clock.now
-        tinter.change { $0.pausedUntil = $0.paused(at: t) ? nil : t + 3600; $0.nightUntil = nil }
+        tinter.change { $0.paused(at: t) ? $0.resume() : $0.pause(minutes: 60, at: t) }
     }
 
-    /// Red until half an hour before the next sunrise, then a fade back into the schedule.
     @objc private func nightUntilSunrise() {
         let t = Clock.now
-        tinter.change { $0.nightUntil = $0.nightOverride(at: t) ? nil : Night.around(t).sunrise - fadeLength; $0.pausedUntil = nil }
+        tinter.change { $0.nightOverride(at: t) ? $0.resume() : $0.nightUntilSunrise(at: t) }
     }
 
     @objc private func toggleTint() {

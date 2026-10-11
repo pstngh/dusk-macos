@@ -73,7 +73,7 @@ Either way, `install` copies the binary to `~/.local/bin/dusk` and loads two Lau
 | LaunchAgent | Runs | When |
 |---|---|---|
 | `local.dusk.display` | `dusk agent` | At login and whenever a monitor attaches; applies no dithering, then exits |
-| `local.dusk.tint` | `dusk tint` | Always; shows the tint and dimming, and the menu bar icon (`install --no-menu` hides the icon) |
+| `local.dusk.tint` | `dusk tint` | Always; shows the tint and dimming, and the menu bar icon |
 
 `install` also removes `nodither` (its LaunchAgent and `~/.local/bin/nodither`).
 
@@ -84,8 +84,15 @@ Either way, `install` copies the binary to `~/.local/bin/dusk` and loads two Lau
 | `dusk status` | Show `enableDither` and the link per external display, the three looks and tonight's times |
 | `dusk set day\|evening\|night warmth <K>` | 0 (pure red) to 6500 (no tint) |
 | `dusk set day\|evening\|night brightness <percent>` | 30 to 100 |
-| `dusk apply` | Apply no dithering now and re-apply the tint |
-| `dusk install [--no-menu]` | Install the binary and LaunchAgents |
+| `dusk set tint on\|off` | Turn the warm tint and dimming on or off |
+| `dusk set dither on\|off` | `off` (the default) applies no dithering; `on` gives macOS back its default link and dithering |
+| `dusk set icon on\|off` | Show or hide the menu bar icon |
+| `dusk pause [minutes]` | No tint or dimming for a while (60 minutes by default), then a fade back |
+| `dusk night` | Night until sunrise |
+| `dusk resume` | End a pause or night |
+| `dusk reset` | Back to the default looks |
+| `dusk apply` | Apply no dithering and the tint again now, e.g. after another app reset the colours |
+| `dusk install` | Install the binary and LaunchAgents |
 | `dusk uninstall` | Remove them, and restore the default link and dithering |
 
 ```

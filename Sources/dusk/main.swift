@@ -1,7 +1,11 @@
 // dusk: no temporal dithering on external displays, and a sun-synced warm tint (Apple Silicon, SDR).
 //   status     show dithering and the link per external display, the looks and tonight's times
-//   set        set a look's warmth (K) or brightness (%)
-//   apply      apply no dithering now and reload the settings
+//   set        set a look's warmth (K) or brightness (%), or turn the tint, dithering or icon on or off
+//   pause      no tint or dimming for a while (60 minutes by default)
+//   night      Night until sunrise
+//   resume     end a pause or night
+//   reset      the default looks
+//   apply      apply no dithering and the tint again now
 //   install    copy this binary to ~/.local/bin and load the LaunchAgents
 //   uninstall  unload them, restore the link and dithering, remove the files
 //   agent      (local.dusk.display) wait for displays to settle, then apply no dithering
@@ -37,27 +41,50 @@ func usage() -> Never {
     usage: dusk status
            dusk set day|evening|night warmth <0-6500 K>
            dusk set day|evening|night brightness <30-100 %>
+           dusk set tint|dither|icon on|off
+           dusk pause [minutes]
+           dusk night
+           dusk resume
+           dusk reset
            dusk apply
-           dusk install [--no-menu]
+           dusk install
            dusk uninstall
     """)
     exit(2)
 }
 
-func set(_ args: [String]) {
-    guard args.count == 3, let phase = Phase.allCases.first(where: { $0.name.lowercased() == args[0] }),
-          let value = Double(args[2]) else { usage() }
+/// Change and save the settings, and tell the running `dusk tint`.
+func change(_ edit: (inout Settings) -> Void) {
     var s = Settings.load()
-    switch args[1] {
-    case "warmth" where (0...6500).contains(value): s.kelvin[phase.rawValue] = value
-    case "brightness" where (30...100).contains(value): s.brightness[phase.rawValue] = value / 100
-    default: usage()
-    }
+    edit(&s)
     s.save()
     notify_post(settingsChanged)
 }
 
-func install(menu: Bool) throws {
+func set(_ args: [String]) {
+    switch (args.first, args.count) {
+    case (let name?, 2) where ["tint", "dither", "icon"].contains(name) && ["on", "off"].contains(args[1]):
+        let on = args[1] == "on"
+        change {
+            switch name {
+            case "tint": $0.enabled = on
+            case "dither": $0.noDither = !on
+            default: $0.icon = on
+            }
+        }
+        if name == "dither" { on ? restoreDisplay() : applyDisplay() }
+    case (let name?, 3):
+        guard let phase = Phase.allCases.first(where: { $0.name.lowercased() == name }), let value = Double(args[2]) else { usage() }
+        switch args[1] {
+        case "warmth" where (0...6500).contains(value): change { $0.kelvin[phase.rawValue] = value }
+        case "brightness" where (30...100).contains(value): change { $0.brightness[phase.rawValue] = value / 100 }
+        default: usage()
+        }
+    default: usage()
+    }
+}
+
+func install() throws {
     let fm = FileManager.default
     // Replace nodither (dusk 1.x).
     launchctl("bootout", "\(domain)/local.nodither")
@@ -79,7 +106,7 @@ func install(menu: Bool) throws {
             "IOPropertyMatch": ["Location": "External"],
             "IOMatchLaunchStream": true,
         ]]]]),
-        ("tint", menu ? ["tint"] : ["tint", "--no-icon"], ["KeepAlive": true]),
+        ("tint", ["tint"], ["KeepAlive": true]),
     ]
     try fm.createDirectory(at: agentPlist("").deletingLastPathComponent(), withIntermediateDirectories: true)
     for job in jobs {
@@ -117,13 +144,19 @@ case "status":
     displayStatus()
     tintStatus()
 case "set": set(Array(args.dropFirst()))
+case "pause":
+    guard let minutes = args.count == 1 ? 60 : Double(args[1]), minutes > 0, args.count <= 2 else { usage() }
+    change { $0.pause(minutes: minutes, at: Clock.now) }
+case "night": change { $0.nightUntilSunrise(at: Clock.now) }
+case "resume": change { $0.resume() }
+case "reset": change { $0.resetLooks() }
 case "apply":
-    Settings.load().noDither ? applyDisplay() : print("no dithering is turned off in the menu")
+    Settings.load().noDither ? applyDisplay() : print("no dithering is off (dusk set dither off turns it on)")
     notify_post(settingsChanged)
-case "install": do { try install(menu: !args.contains("--no-menu")) } catch { fail("install failed: \(error)") }
+case "install": do { try install() } catch { fail("install failed: \(error)") }
 case "uninstall": uninstall()
 case "agent": displayAgent()
-case "tint": runTint(icon: !args.contains("--no-icon"))
+case "tint": runTint()
 default: usage()
 }
 exit(failed ? 1 : 0)

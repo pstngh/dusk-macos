@@ -64,7 +64,7 @@ struct Settings {
     static let presetKelvin = [4000.0, 2700, 0], presetBrightness = [1.0, 0.85, 0.7]
 
     var kelvin = presetKelvin, brightness = presetBrightness
-    var enabled = true, noDither = true
+    var enabled = true, noDither = true, icon = true
     var pausedUntil: Date?, nightUntil: Date?
 
     static func load() -> Settings {
@@ -74,6 +74,7 @@ struct Settings {
         if let b = d.array(forKey: "brightness") as? [Double], b.count == 3 { s.brightness = b }
         s.enabled = d.object(forKey: "enabled") as? Bool ?? true
         s.noDither = d.object(forKey: "noDither") as? Bool ?? true
+        s.icon = d.object(forKey: "icon") as? Bool ?? true
         s.pausedUntil = d.object(forKey: "pausedUntil") as? Date
         s.nightUntil = d.object(forKey: "nightUntil") as? Date
         return s
@@ -85,6 +86,7 @@ struct Settings {
         d.set(brightness, forKey: "brightness")
         d.set(enabled, forKey: "enabled")
         d.set(noDither, forKey: "noDither")
+        d.set(icon, forKey: "icon")
         d.set(pausedUntil, forKey: "pausedUntil")
         d.set(nightUntil, forKey: "nightUntil")
     }
@@ -95,6 +97,28 @@ struct Settings {
 
     func paused(at t: Date) -> Bool { pausedUntil.map { $0 > t } ?? false }
     func nightOverride(at t: Date) -> Bool { nightUntil.map { $0 > t } ?? false }
+
+    mutating func resetLooks() {
+        kelvin = Settings.presetKelvin
+        brightness = Settings.presetBrightness
+    }
+
+    /// No tint or dimming for a while, then a fade back into the schedule.
+    mutating func pause(minutes: Double, at t: Date) {
+        pausedUntil = t + minutes * 60
+        nightUntil = nil
+    }
+
+    /// Night until half an hour before the next sunrise, then a fade back into the schedule.
+    mutating func nightUntilSunrise(at t: Date) {
+        nightUntil = Night.around(t).sunrise - fadeLength
+        pausedUntil = nil
+    }
+
+    mutating func resume() {
+        pausedUntil = nil
+        nightUntil = nil
+    }
 }
 
 // MARK: - Colour
@@ -282,8 +306,9 @@ struct Schedule {
 /// changes show it again at once.
 final class Tinter {
     private(set) var settings = Settings.load()
-    private(set) var icon = -1
-    var iconChanged: ((Int) -> Void)?
+    private(set) var icon = 0
+    /// Called after every update, for the menu bar icon.
+    var updated: (() -> Void)?
     /// What the gamma tables show, and the menu's live preview while a slider moves.
     private var shown = Look.off
     private var preview: Look?
@@ -342,10 +367,8 @@ final class Tinter {
         let schedule = Schedule(settings, around: t)
         let look = schedule.look(t)
         show(look)
-        if schedule.icon(t) != icon {
-            icon = schedule.icon(t)
-            iconChanged?(icon)
-        }
+        icon = schedule.icon(t)
+        updated?()
         if schedule.describe(t) != described {
             described = schedule.describe(t)
             print("[\(stamp(t))] \(described)")

@@ -1,12 +1,11 @@
-// Sun-synced warm tint and brightness.
+// Sun-synced warm tint and dimming.
 //
-// The tint is macOS's Accessibility Color Filters (Color Tint): dusk writes the settings,
-// universalaccessd applies them, and macOS keeps them across mode switches, sleep and reboots.
-// Brightness is a gamma table, which macOS drops when the process that set it exits, so the
-// resident `dusk menu` holds it and `dusk tick` sends it the value (see Menu.swift).
+// Both are one gamma formula per display: each channel's encoded value is multiplied by the warmth
+// colour times the brightness. macOS drops a gamma table when the process that set it exits and
+// resets it on display changes, so `dusk tint` stays running: it sets the formula again after
+// display changes and wake, and otherwise sleeps on a wall-clock timer until the output next changes.
 
-import CoreGraphics
-import Foundation
+import AppKit
 import notify
 
 // MARK: - Schedule constants
@@ -20,10 +19,9 @@ let nightShare = 0.75
 /// Back toward Evening when the last quarter of the time from sunset to sunrise starts.
 let morningShare = 0.25
 let fadeLength: TimeInterval = 30 * 60
-/// A fade steps when a channel's 8-bit output has moved this many levels (and always at its end).
-let stepLevels = 2
-/// Local hours (on the hour) when launchd starts `dusk tick`. Every fade starts within one of them.
-let checkHours = [2, 3, 4, 5, 6, 7, 15, 16, 17, 18, 19, 20]
+
+/// Posted by `dusk set` and `dusk apply` so the running `dusk tint` reloads the settings.
+let settingsChanged = "local.dusk.settings"
 
 /// The current time, or with DUSK_NOW="yyyy-MM-dd HH:mm" a simulated one that runs DUSK_SPEED times as fast.
 enum Clock {
@@ -101,32 +99,26 @@ struct Settings {
 
 // MARK: - Colour
 
-/// What dusk shows: Color Filters gains for white, which work in linear light, and a brightness
-/// that scales encoded values (a gamma table).
+/// What dusk shows: a multiplier for each channel's encoded value (warmth colour × brightness).
 struct Look: Equatable {
-    var gains = [1.0, 1.0, 1.0]
-    var brightness = 1.0
+    var rgb = [1.0, 1.0, 1.0]
 
     static let off = Look()
 
-    init(gains: [Double] = [1, 1, 1], brightness: Double = 1) {
-        self.gains = gains
-        self.brightness = brightness
+    init(rgb: [Double] = [1, 1, 1]) {
+        self.rgb = rgb
     }
 
-    /// The colour for `kelvin`, converted to linear light for Color Filters.
     init(kelvin: Double, brightness: Double) {
-        self.init(gains: warmth(kelvin).map { pow($0, 2.2) }, brightness: brightness)
+        self.init(rgb: warmth(kelvin).map { $0 * brightness })
     }
 
     func mixed(_ other: Look, _ p: Double) -> Look {
-        Look(gains: zip(gains, other.gains).map { $0 + ($1 - $0) * p }, brightness: brightness + (other.brightness - brightness) * p)
+        Look(rgb: zip(rgb, other.rgb).map { $0 + ($1 - $0) * p })
     }
 
     /// The 8-bit output for white, per channel. dusk only updates when this changes.
-    var levels: [Int] { gains.map { Int((pow($0, 1 / 2.2) * brightness * 255).rounded()) } }
-
-    func stepsAway(from levels: [Int]) -> Bool { zip(self.levels, levels).contains { abs($0 - $1) >= stepLevels } }
+    var levels: [Int] { rgb.map { Int(($0 * 255).rounded()) } }
 }
 
 /// A blackbody colour approximation, 0...255 per channel.
@@ -138,8 +130,8 @@ private func blackbody(_ kelvin: Double) -> [Double] {
     return [r, g, b].map { min(max($0, 0), 255) }
 }
 
-/// The colour for a temperature, in encoded values with red = 1: the blackbody colour white-balanced to
-/// 6500 K, and below 2000 K a smoothstep from 2000 K's colour to pure red at 0 K.
+/// The colour for a temperature, in encoded values with red = 1: the blackbody colour white-balanced
+/// to 6500 K, and below 2000 K a smoothstep from 2000 K's colour to pure red at 0 K.
 func warmth(_ kelvin: Double) -> [Double] {
     let white = blackbody(6500)
     func balanced(_ k: Double) -> [Double] { zip(blackbody(k), white).map { min($0 / $1, 1) } }
@@ -217,7 +209,7 @@ struct Schedule {
             return fades(.day, n.sunset - fadeLength / 2, n.sunset + fadeLength / 2, n.red - fadeLength, n.red, .night)
                 + fades(.night, n.morning, n.morning + fadeLength, n.sunrise - fadeLength, n.sunrise, .day)
         }
-        edges = keys.map(\.time) + [settings.pausedUntil, settings.nightUntil].compactMap { $0 }.flatMap { [$0, $0 + fadeLength] }
+        edges = (keys.map(\.time) + [settings.pausedUntil, settings.nightUntil].compactMap { $0 }.flatMap { [$0, $0 + fadeLength] }).sorted()
     }
 
     /// The keyframes around `t` and the fade progress between them.
@@ -251,30 +243,25 @@ struct Schedule {
         return (p < 0.5 ? a : b).phase.rawValue
     }
 
-    /// The next step before `horizon`: when the 8-bit output has moved `stepLevels` from `levels`,
-    /// or at the end of a fade if it differs at all.
-    func nextChange(after t: Date, from levels: [Int], before horizon: Date) -> Date? {
+    /// The next time the 8-bit output differs from `shown`'s, or the end of a fade if `shown` isn't
+    /// exactly its final look; nil if nothing changes from here on.
+    func nextChange(after t: Date, from shown: Look) -> Date? {
         var a = t
-        for b in edges.filter({ $0 > t && $0 < horizon }).sorted() + [horizon] {
+        for b in edges where b > t {
             let end = look(b)
-            if end.stepsAway(from: levels) {
-                // Fades are monotonic, so bisect for the first step (to 0.5 s).
+            if end.levels != shown.levels {
+                // Fades are monotonic, so bisect for the first change (to 0.5 s).
                 var lo = a, hi = b
                 while hi.timeIntervalSince(lo) > 0.5 {
                     let mid = lo + hi.timeIntervalSince(lo) / 2
-                    if look(mid).stepsAway(from: levels) { hi = mid } else { lo = mid }
+                    if look(mid).levels != shown.levels { hi = mid } else { lo = mid }
                 }
                 return hi
             }
-            if end.levels != levels { return b }
+            if end != shown { return b }
             a = b
         }
         return nil
-    }
-
-    /// The end of the fade running at `t`, or nil if the output holds.
-    func fadeEnd(after t: Date) -> Date? {
-        edges.filter { $0 > t }.min().flatMap { look($0).levels != look(t).levels ? $0 : nil }
     }
 
     func describe(_ t: Date) -> String {
@@ -288,203 +275,132 @@ struct Schedule {
     }
 }
 
-// MARK: - Color Filters
+// MARK: - dusk tint
 
-private let mediaAccessibility = "/System/Library/Frameworks/MediaAccessibility.framework/MediaAccessibility"
+/// The resident part of dusk: shows the look for now on every display, then sleeps on a wall-clock
+/// timer (time asleep counts) until the 8-bit output next changes. Settings changes, wake and clock
+/// changes show it again at once.
+final class Tinter {
+    private(set) var settings = Settings.load()
+    private(set) var icon = -1
+    var iconChanged: ((Int) -> Void)?
+    /// What the gamma tables show, and the menu's live preview while a slider moves.
+    private var shown = Look.off
+    private var preview: Look?
+    private var described = ""
+    private let timer = DispatchSource.makeTimerSource(queue: .main)
+    private var token: Int32 = 0
+    private var watchUntil = Date.distantPast
 
-/// MediaAccessibility's private Color Filters preference functions. Each setter writes
-/// com.apple.mediaaccessibility and posts a change notification, and universalaccessd applies it.
-private struct MA {
-    let getEnabled: @convention(c) (Int) -> UInt8
-    let setEnabled: @convention(c) (Int, UInt8) -> Void
-    let getType: @convention(c) (Int) -> Int
-    let setType: @convention(c) (Int, Int) -> Void
-    let getHue: @convention(c) () -> Double
-    let setHue: @convention(c) (Double) -> Void
-    let getIntensity: @convention(c) () -> Double
-    let setIntensity: @convention(c) (Double) -> Void
-    let suspendNotifications: @convention(c) (UInt8) -> Void
-
-    static let api: MA? = {
-        func f<T>(_ name: String, _ t: T.Type) -> T? { sym(mediaAccessibility, "MADisplayFilterPref" + name, t) }
-        guard let a = f("GetCategoryEnabled", (@convention(c) (Int) -> UInt8).self),
-              let b = f("SetCategoryEnabled", (@convention(c) (Int, UInt8) -> Void).self),
-              let c = f("GetType", (@convention(c) (Int) -> Int).self),
-              let d = f("SetType", (@convention(c) (Int, Int) -> Void).self),
-              let e = f("GetSingleColorHue", (@convention(c) () -> Double).self),
-              let g = f("SetSingleColorHue", (@convention(c) (Double) -> Void).self),
-              let h = f("GetSingleColorIntensity", (@convention(c) () -> Double).self),
-              let i = f("SetSingleColorIntensity", (@convention(c) (Double) -> Void).self),
-              let j = f("SuspendNotifications", (@convention(c) (UInt8) -> Void).self) else { return nil }
-        return MA(getEnabled: a, setEnabled: b, getType: c, setType: d, getHue: e, setHue: g,
-                  getIntensity: h, setIntensity: i, suspendNotifications: j)
-    }()
-}
-
-/// The Color Filters settings dusk uses: category 1 (Color) with filter type 16 (Color Tint).
-struct ColorFilters: Equatable {
-    static let category = 1, colorTint = 16
-    /// universalaccessd applies at least this tint intensity (about 5400 K).
-    static let minIntensity = 0.25
-
-    var enabled: Bool
-    var type: Int
-    var hue: Double  // 0...1 = 0...360°
-    var intensity: Double
-
-    static var available: Bool { MA.api != nil }
-
-    static func read() -> ColorFilters? {
-        guard let ma = MA.api else { return nil }
-        return ColorFilters(enabled: ma.getEnabled(category) != 0, type: ma.getType(category),
-                            hue: ma.getHue(), intensity: ma.getIntensity())
-    }
-
-    /// Color Tint's matrix is diag((1 − i) + i × hue colour), so for warm gains with red = 1 and
-    /// green ≥ blue: intensity = 1 − blue, hue = 60° × (green − blue) / (1 − blue).
-    func showing(_ gains: [Double]) -> ColorFilters {
-        var f = self
-        let blue = gains[2]
-        f.enabled = blue < 0.995
-        guard f.enabled else { return f }  // keep the user's own type, hue and intensity
-        f.type = Self.colorTint
-        f.intensity = max(1 - blue, Self.minIntensity)
-        f.hue = max(gains[1] - blue, 0) / (1 - blue) / 6
-        return f
-    }
-
-    /// Gains for white, or nil when a filter other than Color Tint is on.
-    var gains: [Double]? {
-        guard enabled else { return [1, 1, 1] }
-        guard type == Self.colorTint else { return nil }
-        let x = hue * 6
-        return [abs(x - 3) - 1, 2 - abs(x - 2), 2 - abs(x - 4)].map { 1 - intensity + intensity * min(max($0, 0), 1) }
-    }
-
-    /// Write what differs from `old`, with one change notification for the batch.
-    func write(over old: ColorFilters) {
-        guard let ma = MA.api else { return }
-        let c = Self.category
-        var writes: [() -> Void] = []
-        if type != old.type { writes.append { ma.setType(c, type) } }
-        if abs(hue - old.hue) > 1e-9 { writes.append { ma.setHue(hue) } }
-        if abs(intensity - old.intensity) > 1e-9 { writes.append { ma.setIntensity(intensity) } }
-        if enabled != old.enabled { writes.append { ma.setEnabled(c, enabled ? 1 : 0) } }
-        guard let last = writes.popLast() else { return }
-        if !writes.isEmpty {
-            ma.suspendNotifications(1)
-            writes.forEach { $0() }
-            ma.suspendNotifications(0)
+    init() {
+        timer.setEventHandler { [unowned self] in update() }
+        timer.activate()
+        notify_register_dispatch(settingsChanged, &token, .main) { [unowned self] _ in
+            settings = Settings.load()
+            update()
+            if gammaWasReset() { setGamma() }
         }
-        last()
+        CGDisplayRegisterReconfigurationCallback({ _, _, tinter in
+            Unmanaged<Tinter>.fromOpaque(tinter!).takeUnretainedValue().displaysChanged()
+        }, Unmanaged.passUnretained(self).toOpaque())
+        let workspace = NSWorkspace.shared.notificationCenter
+        workspace.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [unowned self] _ in update() }
+        workspace.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [unowned self] _ in
+            displaysChanged()
+        }
+        // An app that sets its own gamma table resets every display's when it quits.
+        for name in [NSWorkspace.didActivateApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
+            workspace.addObserver(forName: name, object: nil, queue: .main) { [unowned self] _ in
+                for delay in [0.1, 1, 3] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [self] in if gammaWasReset() { setGamma() } }
+                }
+            }
+        }
+        for name in [Notification.Name.NSSystemClockDidChange, .NSSystemTimeZoneDidChange] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [unowned self] _ in update() }
+        }
+        update()
     }
 
-    /// The user's own settings, saved at the first install and put back by uninstall.
-    var dictionary: [String: Any] { ["enabled": enabled, "type": type, "hue": hue, "intensity": intensity] }
-
-    init(enabled: Bool, type: Int, hue: Double, intensity: Double) {
-        (self.enabled, self.type, self.hue, self.intensity) = (enabled, type, hue, intensity)
+    /// Change and save the settings, and show the result.
+    func change(_ edit: (inout Settings) -> Void) {
+        edit(&settings)
+        settings.save()
+        preview = nil
+        update()
     }
 
-    init?(_ d: [String: Any]?) {
-        guard let d, let e = d["enabled"] as? Bool, let t = d["type"] as? Int,
-              let h = d["hue"] as? Double, let i = d["intensity"] as? Double else { return nil }
-        self.init(enabled: e, type: t, hue: h, intensity: i)
-    }
-}
-
-/// Show `look`'s tint, writing Color Filters only if the 8-bit output changes. Returns whether it wrote.
-@discardableResult
-func showTint(_ look: Look) -> Bool {
-    guard let old = ColorFilters.read() else { return false }
-    let new = old.showing(look.gains)
-    if let shown = old.gains, Look(gains: shown, brightness: look.brightness).levels
-        == Look(gains: new.gains!, brightness: look.brightness).levels { return false }
-    new.write(over: old)
-    return true
-}
-
-// MARK: - Brightness and icon state, from `dusk tick` to `dusk menu`
-
-/// A Darwin notification whose 64-bit state holds the brightness (per mille) and the icon.
-enum Shared {
-    static let name = "local.dusk.state"
-    static let token: Int32 = {
-        var t: Int32 = 0
-        notify_register_check(name, &t)
-        return t
-    }()
-
-    static func decode(_ s: UInt64) -> (brightness: Double, icon: Int)? {
-        s == 0 ? nil : (Double(s & 0xffff) / 1000, Int(s >> 16) - 1)
+    /// Show `look` instead of the schedule until the next `change`.
+    func preview(_ look: Look) {
+        preview = look
+        show(look)
     }
 
-    static func read() -> (brightness: Double, icon: Int)? {
-        var s: UInt64 = 0
-        notify_get_state(token, &s)
-        return decode(s)
-    }
-
-    static func post(brightness: Double, icon: Int) {
-        let s = UInt64((brightness * 1000).rounded()) | UInt64(icon + 1) << 16
-        var old: UInt64 = 0
-        notify_get_state(token, &old)
-        guard s != old else { return }
-        notify_set_state(token, s)
-        notify_post(name)
-    }
-}
-
-// MARK: - dusk tick
-
-/// The displays are all asleep or the session is locked, so a fade would go unseen.
-func screensOff() -> Bool {
-    if (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool == true { return true }
-    var ids = [CGDirectDisplayID](repeating: 0, count: 16)
-    var count: UInt32 = 0
-    CGGetOnlineDisplayList(16, &ids, &count)
-    return ids.prefix(Int(count)).allSatisfy { CGDisplayIsAsleep($0) != 0 }
-}
-
-/// The next time launchd starts `dusk tick`.
-func nextCheck(after t: Date) -> Date {
-    checkHours.compactMap {
-        Calendar.current.nextDate(after: t, matching: DateComponents(hour: $0, minute: 0), matchingPolicy: .nextTime)
-    }.min()!
-}
-
-/// `dusk tick`: started by launchd at login, at the check hours, after wake (for missed checks)
-/// and when the settings change. Shows the look for now. If a fade is running or starts before the
-/// next check, it waits idle on a wall-clock timer (time asleep counts) and steps each time the
-/// 8-bit output changes; then it exits. Nothing is kept between runs.
-func tick() -> Never {
-    if !ColorFilters.available { fail("tint: Color Filters API not found on this macOS, skipping the tint") }
-    let settings = Settings.load()
-    let schedule = Schedule(settings, around: Clock.now)
-    var writes = 0
-    func step() {
+    func update() {
+        guard preview == nil else { return }
         let t = Clock.now
-        var look = schedule.look(t)
-        // Nobody is watching: jump to the end of the fade instead of stepping through it.
-        if screensOff(), let end = schedule.fadeEnd(after: t) { look = schedule.look(end) }
-        if showTint(look) { writes += 1 }
-        Shared.post(brightness: look.brightness, icon: schedule.icon(t))
-        // A pause can end outside the check hours; "Night until sunrise" ends inside them.
-        let horizon = max(nextCheck(after: t), settings.pausedUntil.map { $0 + fadeLength } ?? .distantPast)
-        guard let next = schedule.nextChange(after: t, from: look.levels, before: horizon) else {
-            if writes > 0 { print("[\(stamp(t))] tick: \(schedule.describe(t)), \(writes) tint update\(writes == 1 ? "" : "s")") }
-            exit(failed ? 1 : 0)
+        let schedule = Schedule(settings, around: t)
+        let look = schedule.look(t)
+        show(look)
+        if schedule.icon(t) != icon {
+            icon = schedule.icon(t)
+            iconChanged?(icon)
         }
-        DispatchQueue.main.asyncAfter(wallDeadline: .now() + Clock.delay(until: next), execute: step)
+        if schedule.describe(t) != described {
+            described = schedule.describe(t)
+            print("[\(stamp(t))] \(described)")
+        }
+        let next = schedule.nextChange(after: t, from: look)
+        timer.schedule(wallDeadline: next.map { .now() + Clock.delay(until: $0) } ?? .distantFuture)
+        // Going idle: hand back the memory freed since the last time.
+        if next.map({ Clock.delay(until: $0) > 60 }) ?? true { malloc_zone_pressure_relief(nil, 0) }
     }
-    step()
-    dispatchMain()
+
+    private func show(_ look: Look) {
+        guard look != shown else { return }
+        shown = look
+        setGamma()
+    }
+
+    /// output = input × rgb, per channel, on every display.
+    private func setGamma() {
+        guard shown.levels != Look.off.levels else { return CGDisplayRestoreColorSyncSettings() }
+        let rgb = shown.rgb.map { CGGammaValue($0) }
+        for id in onlineDisplays() { CGSetDisplayTransferByFormula(id, 0, rgb[0], 1, 0, rgb[1], 1, 0, rgb[2], 1) }
+    }
+
+    /// macOS resets gamma tables during mode switches, monitor attach and wake, at a moment it
+    /// doesn't announce. After any display change, check every 20 ms for 3 s and set ours again as
+    /// soon as it has been reset.
+    private func displaysChanged() {
+        guard shown.levels != Look.off.levels else { return }
+        let watching = watchUntil > Date()
+        watchUntil = Date() + 3
+        if !watching { watch() }
+    }
+
+    private func watch() {
+        if gammaWasReset() { setGamma() }
+        if Date() < watchUntil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [self] in watch() }
+        }
+    }
+
+    private func gammaWasReset() -> Bool {
+        shown.levels != Look.off.levels && onlineDisplays().contains { id in
+            var r = [CGGammaValue](repeating: 0, count: 256), g = r, b = r
+            var n: UInt32 = 0
+            CGGetDisplayTransferByTable(id, 256, &r, &g, &b, &n)
+            guard n > 0 else { return false }
+            return zip([r[Int(n) - 1], g[Int(n) - 1], b[Int(n) - 1]], shown.rgb).contains { abs(Double($0) - $1) > 0.002 }
+        }
+    }
 }
 
 func tintStatus() {
     let s = Settings.load(), t = Clock.now
     let n = Night.around(t)
-    print("Tint\(ColorFilters.available ? "" : " (Color Filters API not found on this macOS)")")
+    print("Tint")
     for p in Phase.allCases {
         let k = s.kelvin[p.rawValue]
         let kelvin = k <= 0 ? "0 K (red)" : k >= 6500 ? "6500 K (off)" : "\(Int(k)) K"

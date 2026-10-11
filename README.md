@@ -39,7 +39,7 @@ The schedule, for Montreal (45.50° N, 73.57° W) in local time:
 | Oct 11 | 18:17 | 20:19 | 03:53 | 07:05 |
 | Dec 21 | 16:13 | 19:48 | 03:42 | 07:31 |
 
-Fades follow the clock, so after sleep the screen goes straight to where the fade should be. A fade updates the screen each time a colour channel has moved 2 of its 256 levels, which is too small to see.
+Fades follow the clock, so after sleep the screen goes straight to where the fade should be. A fade updates the screen each time a colour channel moves one of its 256 levels, and ends exactly on the next look.
 
 The menu bar icon (sun, sunset or moon) opens a menu with:
 
@@ -69,13 +69,12 @@ swift build -c release
 .build/release/dusk install
 ```
 
-Either way, `install` copies the binary to `~/.local/bin/dusk` and loads three LaunchAgents from `~/Library/LaunchAgents`. No root needed.
+Either way, `install` copies the binary to `~/.local/bin/dusk` and loads two LaunchAgents from `~/Library/LaunchAgents`. No root needed.
 
 | LaunchAgent | Runs | When |
 |---|---|---|
 | `local.dusk.display` | `dusk agent` | At login and whenever a monitor attaches; applies no dithering, then exits |
-| `local.dusk.tint` | `dusk tick` | At login, on the hour 2–7 AM and 3–8 PM, after wake, and on setting changes; runs any fade that is due, then exits |
-| `local.dusk.menu` | `dusk menu` | Always; holds the dimming and shows the menu bar icon (`install --no-menu` hides the icon) |
+| `local.dusk.tint` | `dusk tint` | Always; shows the tint and dimming, and the menu bar icon (`install --no-menu` hides the icon) |
 
 `install` also removes `nodither` (its LaunchAgent and `~/.local/bin/nodither`).
 
@@ -88,7 +87,7 @@ Either way, `install` copies the binary to `~/.local/bin/dusk` and loads three L
 | `dusk set day\|evening\|night brightness <percent>` | 30 to 100 |
 | `dusk apply` | Apply no dithering now and re-apply the tint |
 | `dusk install [--no-menu]` | Install the binary and LaunchAgents |
-| `dusk uninstall` | Remove them, and restore the default link, dithering and your previous Color Filters settings |
+| `dusk uninstall` | Remove them, and restore the default link and dithering |
 
 ```
 $ dusk status
@@ -120,36 +119,32 @@ The log is at `~/Library/Logs/dusk.log`.
 - **Status:** `enableDither` comes from the IORegistry (what `ioreg -lw0 | grep enableDither` shows). The link comes from the DCP itself via `IOAVVideoInterfaceGetLinkData`, so it reports what is actually on the cable. Monitors are matched across IOKit, the DCP and CoreGraphics by their EDID product ID and serial.
 - **Reapplying:** `local.dusk.display` uses launchd's `com.apple.iokit.matching` event stream on `DCPAVServiceProxy` (`Location = External`), which the DCP publishes each time a monitor attaches, including after the Mac wakes from sleep. launchd starts `dusk agent`, which waits for WindowServer to bring the display online, applies, and exits.
 
-### Tint
+### Tint and dimming
 
-- **Color Filters.** The tint is macOS's own Accessibility Color Filters, set to Color Tint (category 1, filter type 16), through MediaAccessibility's private `MADisplayFilterPref…` functions. They write `com.apple.mediaaccessibility`, and universalaccessd applies the result as WindowServer's accessibility color matrix. macOS keeps it on its own across display mode switches (no flash) and reboots, so nothing has to run to keep the tint.
-- **Colour.** A blackbody approximation white-balanced to 6500 K, blending smoothly to pure red below 2000 K. Color Tint's matrix is `diag((1 − i) + i × hue colour)`, so for a warm white (red = 1, green ≥ blue) intensity = 1 − blue and hue = 60° × (green − blue) / (1 − blue); 0 K is hue 0° at 100%, pure red. The colours are defined on encoded values and Color Filters work in linear light, so dusk converts them with a 2.2 power.
-- **Writes.** Each fade step writes the hue and intensity with a single change notification, and nothing is written when the output wouldn't change. One step costs about 18 ms of CPU across the system, mostly universalaccessd, siriactionsd, BiomeAgent and distnoted reacting to the preference change, so a day's four fades (about 260 steps) cost about 4.6 s.
-- **Schedule.** Sunrise and sunset use NOAA's equations (zenith 90.833°). `dusk tick` is stateless: it works out the look for now, and if a fade is running or starts before the next hourly check, it waits idle on a wall-clock timer (time asleep counts), steps through the fade and exits. launchd starts missed checks after wake and never runs two at once. When the displays are asleep or the screen is locked, it skips to the end of the fade.
-
-### Dimming
-
-Color Filters can't dim: macOS normalizes the matrix so the brightest channel stays at 100%, and the Reduce White Point setting only works on iOS. So dusk dims with a gamma formula (output = brightness × input) on each display. macOS drops a gamma table when the process that set it exits, and resets every display's table during a mode switch, so `dusk menu` stays running to hold it. `dusk tick` sends it the brightness through a Darwin notification. After a display change or wake, it checks the tables every 20 ms for 3 seconds and sets them again as soon as macOS has reset them, which takes about 25 ms, while the monitor is still blank from the switch. Otherwise it has no timers and doesn't poll.
+- **Gamma.** Both are one gamma formula per display (`CGSetDisplayTransferByFormula`): each channel's encoded value is multiplied by the warmth colour times the brightness. macOS drops a gamma table when the process that set it exits, so `dusk tint` stays running.
+- **Colour.** A blackbody approximation white-balanced to 6500 K, blending smoothly to pure red below 2000 K, so 0 K is pure red.
+- **Schedule.** Sunrise and sunset use NOAA's equations (zenith 90.833°). `dusk tint` shows the look for now and sleeps on a wall-clock timer until the 8-bit output next changes, so time asleep counts and the screen is right on wake. Fades move each channel in a straight line between the two looks.
+- **Resets.** macOS resets every display's gamma table during a mode switch and when another app that set its own table quits, and can on monitor attach or wake. After any display change or wake, `dusk tint` checks the tables every 20 ms for 3 seconds and sets them again as soon as they were reset; that takes about 25 ms, while the monitor is still blank from the switch. After an app switch or quit it checks three times over 3 seconds. Otherwise it has no timers and doesn't poll.
 
 ## Overhead
 
 Measured on a Mac mini M4 with macOS 26.6:
 
-- **Resident:** only `dusk menu`, 12 MB (as `top` shows it), with no idle wakeups.
-- **CPU:** about 5 s a day. 4.6 s of it is macOS applying the ~260 tint steps of the four fades; an hourly check with nothing to do takes ~30 ms.
-- **Display mode switch:** the tint is unaffected; dimming is back about 25 ms after macOS resets it.
+- **Resident:** only `dusk tint`, 11 MB (as `top` shows it), with no idle wakeups.
+- **CPU:** well under a second a day: about 0.07 s per fade (four a day, about 900 one-level steps in all) and 0.1 s at login.
+- **Settings changes:** applied in about 30 ms.
+- **Display mode switch:** the tint and dimming are back about 25 ms after macOS resets them.
 
 ## Notes
 
 - Uses private Apple APIs, so a macOS update can break it. If one disappears, that step is skipped and the run exits 1; turning off GPU dithering only needs public IOKit, so it still happens.
-- Tested on a Mac mini M4 with macOS 26.6 and two Dell monitors (one on HDMI, one on USB-C). No dithering was tested through a monitor power cycle and a system sleep/wake, the tint and dimming through display mode switches. Other chips and macOS versions are untested.
+- Tested on a Mac mini M4 with macOS 26.6 and two Dell monitors (one on HDMI, one on USB-C). No dithering was tested through a monitor power cycle and a system sleep/wake; the gamma reset handling through display mode switches and an app quitting. Other chips and macOS versions are untested.
 - SDR only. HDR needs a 10-bit link.
 - `enableDither` resets on reboot; `local.dusk.display` sets it again at login.
 - Display mode changes don't undo no dithering. WindowServer applies the saved 8-bit RGB link to whatever mode is active, so a game that switches resolution or refresh rate keeps it, and GPU dithering stays off across the link retrain (tested 4K60 → 4K30 and 240 → 120 Hz, during the switch and after the game quits).
 - Night Shift, color profile switches, gamma changes and Color Filters don't reset the link or `enableDither` (tested).
-- dusk owns the Color Filters setting while installed. The weakest tint macOS applies is 25% intensity, about 5400 K, so settings between about 5400 K and 6500 K look like 5400 K. `uninstall` puts back the Color Filters settings you had before the first install.
-- Don't run another app that tints or dims with gamma tables alongside dusk; they would overwrite each other's tables.
-- Dimming ignores any calibration curve (`vcgt`) in the display's color profile while it is below 100%, like other gamma-table dimmers.
+- Don't run another app that tints or dims with gamma tables alongside dusk; they would overwrite each other's tables. If a command-line tool resets the gamma tables, `dusk apply` sets them again.
+- While a tint or dimming is on, the display's calibration curve (`vcgt` in its color profile), if it has one, is replaced, like with other gamma-table apps.
 - `uninstall` switches each external monitor back to the link WindowServer picks by default and turns GPU dithering back on.
 
 ## License

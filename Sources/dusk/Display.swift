@@ -113,11 +113,15 @@ func currentLinks() -> [String: String] {
 
 // MARK: - Link and dithering
 
-func externalDisplays() -> [CGDirectDisplayID] {
+func onlineDisplays() -> [CGDirectDisplayID] {
     var ids = [CGDirectDisplayID](repeating: 0, count: 16)
     var count: UInt32 = 0
     CGGetOnlineDisplayList(16, &ids, &count)
-    return ids.prefix(Int(count)).filter { CGDisplayIsBuiltin($0) == 0 }
+    return Array(ids.prefix(Int(count)))
+}
+
+func externalDisplays() -> [CGDirectDisplayID] {
+    onlineDisplays().filter { CGDisplayIsBuiltin($0) == 0 }
 }
 
 /// Set each external display's link to the preferred 8-bit link, or with `restore` to

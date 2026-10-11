@@ -1,14 +1,14 @@
 // dusk: no temporal dithering on external displays, and a sun-synced warm tint (Apple Silicon, SDR).
-//   status     show dithering and the link per external display, the tint settings and tonight's times
-//   set        set a phase's warmth (K) or brightness (%)
-//   apply      apply no dithering now and re-run the tint
+//   status     show dithering and the link per external display, the looks and tonight's times
+//   set        set a look's warmth (K) or brightness (%)
+//   apply      apply no dithering now and reload the settings
 //   install    copy this binary to ~/.local/bin and load the LaunchAgents
-//   uninstall  unload them, restore the link, dithering and Color Filters, remove the files
+//   uninstall  unload them, restore the link and dithering, remove the files
 //   agent      (local.dusk.display) wait for displays to settle, then apply no dithering
-//   tick       (local.dusk.tint) show the tint for now and run any fade that is due
-//   menu       (local.dusk.menu) hold the brightness and show the menu bar icon
+//   tint       (local.dusk.tint) show the warm tint and dimming, and the menu bar icon
 
 import Foundation
+import notify
 
 setvbuf(stdout, nil, _IOLBF, 0)
 
@@ -30,19 +30,6 @@ func launchctl(_ args: String...) -> Int32 {
     try? p.run()
     p.waitUntilExit()
     return p.terminationStatus
-}
-
-/// Restart the tint job so it shows the schedule with the current settings.
-func kickTint() {
-    launchctl("kickstart", "-k", "\(domain)/local.dusk.tint")
-}
-
-/// Show the tint for now: through the tint job when installed, else just the Color Filters part.
-func retint() {
-    if FileManager.default.fileExists(atPath: agentPlist("tint").path) { return kickTint() }
-    let t = Clock.now
-    showTint(Schedule(Settings.load(), around: t).look(t))
-    print("dusk is not installed: tint set for now, no fades or dimming")
 }
 
 func usage() -> Never {
@@ -67,7 +54,7 @@ func set(_ args: [String]) {
     default: usage()
     }
     s.save()
-    retint()
+    notify_post(settingsChanged)
 }
 
 func install(menu: Bool) throws {
@@ -85,10 +72,6 @@ func install(menu: Bool) throws {
         try? fm.removeItem(at: installedBinary)
         try fm.copyItem(at: me, to: installedBinary)
     }
-    // Remember the user's own Color Filters settings once, for uninstall.
-    if Settings.store.dictionary(forKey: "previousColorFilters") == nil, let f = ColorFilters.read() {
-        Settings.store.set(f.dictionary, forKey: "previousColorFilters")
-    }
     let jobs: [(name: String, args: [String], keys: [String: Any])] = [
         // launchd watches IOKit and starts the job only when a monitor's AV service appears.
         ("display", ["agent"], ["LaunchEvents": ["com.apple.iokit.matching": ["display attached": [
@@ -96,10 +79,7 @@ func install(menu: Bool) throws {
             "IOPropertyMatch": ["Location": "External"],
             "IOMatchLaunchStream": true,
         ]]]]),
-        // launchd runs missed calendar checks after wake and never starts a second instance.
-        // ThrottleInterval 1: a settings change restarts the job within a second, not 10.
-        ("tint", ["tick"], ["StartCalendarInterval": checkHours.map { ["Hour": $0, "Minute": 0] }, "ThrottleInterval": 1]),
-        ("menu", menu ? ["menu"] : ["menu", "--no-icon"], ["KeepAlive": true]),
+        ("tint", menu ? ["tint"] : ["tint", "--no-icon"], ["KeepAlive": true]),
     ]
     try fm.createDirectory(at: agentPlist("").deletingLastPathComponent(), withIntermediateDirectories: true)
     for job in jobs {
@@ -120,19 +100,15 @@ func install(menu: Bool) throws {
 }
 
 func uninstall() {
-    for job in ["menu", "tint", "display"] {
+    // Stopping `dusk tint` makes macOS drop its gamma tables.
+    for job in ["tint", "display"] {
         launchctl("bootout", "\(domain)/local.dusk.\(job)")
         try? FileManager.default.removeItem(at: agentPlist(job))
     }
     restoreDisplay()
-    if let now = ColorFilters.read() {
-        var mine = now
-        mine.enabled = false
-        (ColorFilters(Settings.store.dictionary(forKey: "previousColorFilters")) ?? mine).write(over: now)
-    }
     Settings.store.removePersistentDomain(forName: "local.dusk")
     try? FileManager.default.removeItem(at: installedBinary)
-    print("removed the LaunchAgents, \(installedBinary.path) and the settings; Color Filters restored")
+    print("removed the LaunchAgents, \(installedBinary.path) and the settings")
 }
 
 let args = Array(CommandLine.arguments.dropFirst())
@@ -143,12 +119,11 @@ case "status":
 case "set": set(Array(args.dropFirst()))
 case "apply":
     Settings.load().noDither ? applyDisplay() : print("no dithering is turned off in the menu")
-    retint()
+    notify_post(settingsChanged)
 case "install": do { try install(menu: !args.contains("--no-menu")) } catch { fail("install failed: \(error)") }
 case "uninstall": uninstall()
 case "agent": displayAgent()
-case "tick": tick()
-case "menu": runMenu(icon: !args.contains("--no-icon"))
+case "tint": runTint(icon: !args.contains("--no-icon"))
 default: usage()
 }
 exit(failed ? 1 : 0)

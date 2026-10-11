@@ -78,6 +78,7 @@ BetterDisplay does far more: a GUI, any connection mode including ones WindowSer
 - `enableDither` resets on reboot; the LaunchAgent sets it again at login.
 - Display mode changes don't undo it. WindowServer applies the saved 8-bit RGB link to whatever mode is active, so a game that switches resolution or refresh rate keeps it, and GPU dithering stays off across the link retrain (tested 4K60 → 4K30 and 240 → 120 Hz, during the switch and after the game quits).
 - Night Shift, color profile switches and gamma changes don't reset the link or `enableDither` (tested).
+- Accessibility Color Filters don't either (tested), and need no app running. For a red screen, use Color Tint at 100% intensity with the hue slider at the far left (0°), which sets green and blue to 0; at 359° about 2% of blue still gets through.
 - `uninstall` switches each external monitor back to the link WindowServer picks by default and turns GPU dithering back on.
 
 ## Credits

@@ -43,6 +43,7 @@ Fades follow the clock, so after sleep the screen goes straight to where the fad
 
 The menu bar icon (sun, sunset or moon) opens a menu with:
 
+- what's on screen now: the look or fade, with its warmth and brightness (an estimate during a fade, e.g. "Day → Evening, fading until 18:32 · about 2900 K, 88%")
 - a warmth and a brightness slider for each look, previewed live while you drag
 - Reset to defaults
 - Pause for 1 hour: no tint or dimming, then a 30-minute fade back into the schedule
@@ -85,7 +86,7 @@ Either way, `install` copies the binary to `~/.local/bin/dusk` and loads two Lau
 
 | Command | |
 |---|---|
-| `dusk status` | Show `enableDither` and the link per external display, the three looks and tonight's times |
+| `dusk status` | Show `enableDither` and the link per external display, the three looks, tonight's times and what's on screen now |
 | `dusk set day\|evening\|night warmth <K>` | 0 (pure red) to 6500 (no tint) |
 | `dusk set day\|evening\|night brightness <percent>` | 30 to 100 |
 | `dusk set tint on\|off` | Turn the warm tint and dimming on or off |
@@ -115,7 +116,7 @@ Tint
   fully red by  20:19
   red until     03:53
   sunrise       07:05
-  now           Day, Evening from 18:02
+  now           Day, Evening from 18:02 · 4000 K, 100%
 ```
 
 Settings are kept in `~/Library/Preferences/local.dusk.plist`. The log, `~/Library/Logs/dusk.log`, gets a line when a fade starts or ends, when a pause, Night or off begins, and when no dithering is applied.

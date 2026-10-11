@@ -56,7 +56,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         menu.removeAllItems()
         draft = tinter.settings
         let t = Clock.now
-        menu.addItem(withTitle: Schedule(draft, around: t).describe(t).capitalizedFirst, action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: Schedule(draft, around: t).now(t).capitalizedFirst, action: nil, keyEquivalent: "")
         menu.addItem(.separator())
         for phase in Phase.allCases {
             let p = phase.rawValue

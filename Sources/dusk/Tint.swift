@@ -126,19 +126,22 @@ struct Settings {
 /// What dusk shows: a multiplier for each channel's encoded value (warmth colour × brightness).
 struct Look: Equatable {
     var rgb = [1.0, 1.0, 1.0]
+    /// For the menu and `dusk status`; during a fade, in between the two looks' values.
+    var kelvin = 6500.0, brightness = 1.0
 
     static let off = Look()
 
-    init(rgb: [Double] = [1, 1, 1]) {
-        self.rgb = rgb
+    init(rgb: [Double] = [1, 1, 1], kelvin: Double = 6500, brightness: Double = 1) {
+        (self.rgb, self.kelvin, self.brightness) = (rgb, kelvin, brightness)
     }
 
     init(kelvin: Double, brightness: Double) {
-        self.init(rgb: warmth(kelvin).map { $0 * brightness })
+        self.init(rgb: warmth(kelvin).map { $0 * brightness }, kelvin: kelvin, brightness: brightness)
     }
 
     func mixed(_ other: Look, _ p: Double) -> Look {
-        Look(rgb: zip(rgb, other.rgb).map { $0 + ($1 - $0) * p })
+        func mix(_ a: Double, _ b: Double) -> Double { a + (b - a) * p }
+        return Look(rgb: zip(rgb, other.rgb).map(mix), kelvin: mix(kelvin, other.kelvin), brightness: mix(brightness, other.brightness))
     }
 
     /// The 8-bit output for white, per channel. dusk only updates when this changes.
@@ -297,6 +300,22 @@ struct Schedule {
         guard let i = keys.firstIndex(where: { $0.time > t }), i + 1 < keys.count else { return a.phase.name }
         return "\(a.phase.name), \(keys[i + 1].phase.name) from \(clock(keys[i].time))"
     }
+
+    /// `describe`, with the warmth and brightness on screen: an estimate while they're changing.
+    func now(_ t: Date) -> String {
+        let look = look(t)
+        guard look.levels != Look.off.levels else { return describe(t) }
+        let percent = "\(Int((look.brightness * 100).rounded()))%"
+        guard look == self.look(t + 1) else {
+            return "\(describe(t)) · about \(Int((look.kelvin / 100).rounded()) * 100) K, \(percent)"
+        }
+        return "\(describe(t)) · \(kelvinText(look.kelvin)), \(percent)"
+    }
+}
+
+/// "2700 K", "0 K (red)" or "6500 K (off)".
+func kelvinText(_ k: Double) -> String {
+    k <= 0 ? "0 K (red)" : k >= 6500 ? "6500 K (off)" : "\(Int(k)) K"
 }
 
 // MARK: - dusk tint
@@ -425,13 +444,11 @@ func tintStatus() {
     let n = Night.around(t)
     print("Tint")
     for p in Phase.allCases {
-        let k = s.kelvin[p.rawValue]
-        let kelvin = k <= 0 ? "0 K (red)" : k >= 6500 ? "6500 K (off)" : "\(Int(k)) K"
-        print("  \(p.name.lowercased().padding(toLength: 12, withPad: " ", startingAt: 0))  \(kelvin), \(Int((s.brightness[p.rawValue] * 100).rounded()))%")
+        print("  \(p.name.lowercased().padding(toLength: 12, withPad: " ", startingAt: 0))  \(kelvinText(s.kelvin[p.rawValue])), \(Int((s.brightness[p.rawValue] * 100).rounded()))%")
     }
     print("  sunset        \(clock(n.sunset))")
     print("  fully red by  \(clock(n.red))")
     print("  red until     \(clock(n.morning))")
     print("  sunrise       \(clock(n.sunrise))")
-    print("  now           \(Schedule(s, around: t).describe(t))")
+    print("  now           \(Schedule(s, around: t).now(t))")
 }

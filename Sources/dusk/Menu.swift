@@ -122,7 +122,7 @@ final class MenuApp: NSObject, NSMenuDelegate {
         for phase in Phase.allCases {
             let p = phase.rawValue
             menu.addItem(row(phase.name, warmthNotches, nearest(warmthNotches, settings.kelvin[p]),
-                             { $0 == 0 ? "Red" : $0 == 6500 ? "Off" : "\(Int($0)) K" }) { [unowned self] v in
+                             { $0 == 6500 ? "Off" : "\(Int($0)) K" }) { [unowned self] v in
                 settings.kelvin[p] = v
                 preview(phase)
             })

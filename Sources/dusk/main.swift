@@ -39,7 +39,9 @@ func launchctl(_ args: String...) -> Int32 {
 func usage() -> Never {
     print("""
     usage: dusk status
-           dusk set day|evening|night warmth <0-6500 K>
+           dusk set day warmth <1700-6500 K>
+           dusk set evening warmth <1200-4000 K>
+           dusk set night warmth <0-2700 K>
            dusk set day|evening|night brightness <30-100 %>
            dusk set tint|dither|icon on|off
            dusk pause [minutes]
@@ -76,7 +78,7 @@ func set(_ args: [String]) {
     case (let name?, 3):
         guard let phase = Phase.allCases.first(where: { $0.name.lowercased() == name }), let value = Double(args[2]) else { usage() }
         switch args[1] {
-        case "warmth" where (0...6500).contains(value): change { $0.kelvin[phase.rawValue] = value }
+        case "warmth" where phase.warmthRange.contains(value): change { $0.kelvin[phase.rawValue] = value }
         case "brightness" where (30...100).contains(value): change { $0.brightness[phase.rawValue] = value / 100 }
         default: usage()
         }

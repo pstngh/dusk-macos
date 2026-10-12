@@ -55,6 +55,8 @@ func stamp(_ date: Date = Date()) -> String { timestamp.string(from: date) }
 enum Phase: Int, CaseIterable {
     case day, evening, night
     var name: String { ["Day", "Evening", "Night"][rawValue] }
+    /// The warmths `dusk set` and the menu offer (6500 K is no tint, 0 K pure red).
+    var warmthRange: ClosedRange<Double> { [1700...6500, 1200...4000, 0...2700][rawValue] }
 }
 
 /// Stored in ~/Library/Preferences/local.dusk.plist.
@@ -71,7 +73,7 @@ struct Settings {
         let d = store
         var s = Settings()
         // Kept within what `dusk set` accepts, so a bad settings file can't black out the screens.
-        if let k = d.array(forKey: "kelvin") as? [Double], k.count == 3 { s.kelvin = k.map { limit($0, 0...6500) } }
+        if let k = d.array(forKey: "kelvin") as? [Double], k.count == 3 { s.kelvin = Phase.allCases.map { limit(k[$0.rawValue], $0.warmthRange) } }
         if let b = d.array(forKey: "brightness") as? [Double], b.count == 3 { s.brightness = b.map { limit($0, 0.3...1) } }
         s.enabled = d.object(forKey: "enabled") as? Bool ?? true
         s.noDither = d.object(forKey: "noDither") as? Bool ?? true

@@ -2,7 +2,9 @@
 
 import AppKit
 
-private let warmthNotches: [Double] = [0, 1200, 1900, 2300, 2700, 3400, 4000, 4500, 5000, 5500, 6500]
+/// Similar-sized steps on screen; each look's slider uses the ones in its range.
+private let warmthNotches: [Double] = [0, 400, 700, 1000, 1200, 1500, 1700, 1900, 2100, 2300, 2500, 2700, 3000, 3400, 3700,
+                                       4000, 4300, 4600, 5000, 5500, 6000, 6500]
 private let brightnessNotches = (6...20).map { Double($0) * 0.05 }  // 30...100%
 private let linkQueue = DispatchQueue(label: "local.dusk.link")
 private let icons = ["sun.max", "sunset", "moon", "circle.slash", "pause.circle"]
@@ -72,7 +74,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
             } else {
                 menu.addItem(withTitle: phase.name, action: nil, keyEquivalent: "")
             }
-            menu.addItem(row("Warmth", warmthNotches, draft.kelvin[p], warmthText) { [unowned self] v in
+            menu.addItem(row("Warmth", warmthNotches.filter(phase.warmthRange.contains), draft.kelvin[p], warmthText) { [unowned self] v in
                 draft.kelvin[p] = v
                 preview(phase)
             })

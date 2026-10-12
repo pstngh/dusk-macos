@@ -87,7 +87,7 @@ Either way, `install` copies the binary to `~/.local/bin/dusk` and loads two Lau
 | Command | |
 |---|---|
 | `dusk status` | Show `enableDither` and the link per external display, the three looks, tonight's times and what's on screen now |
-| `dusk set day\|evening\|night warmth <K>` | 0 (pure red) to 6500 (no tint) |
+| `dusk set day\|evening\|night warmth <K>` | Day 1700 to 6500 (no tint), Evening 1200 to 4000, Night 0 (pure red) to 2700 |
 | `dusk set day\|evening\|night brightness <percent>` | 30 to 100 |
 | `dusk set tint on\|off` | Turn the warm tint and dimming on or off |
 | `dusk set dither on\|off` | `off` (the default) applies no dithering; `on` gives macOS back its default link and dithering |
